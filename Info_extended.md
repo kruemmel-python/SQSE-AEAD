@@ -3,6 +3,7 @@
 Diese Datei ergänzt die vorherige `Info.md` um konkrete Kostenabschätzungen für Angreifer, eine Visualisierung (Zeit vs Entropie) und ein GitHub Issue‑Template für Security‑Audits.
 
 **Datum:** automatische Generierung
+<img width="1024" height="1024" alt="Generated Image November 03, 2025 - 7_49PM" src="https://github.com/user-attachments/assets/6d2a8715-702e-47da-9424-2d3eb741ff6b" />
 
 ---
 
