@@ -106,6 +106,12 @@
         participant CLI_GUI as "CLI / Streamlit GUI"
     end
 
+sequenceDiagram
+    actor User
+    box "Application Layer"
+        participant CLI_GUI as "CLI / Streamlit GUI"
+    end
+
     box "Python Core Logic (sqse_aead_pkg)"
         participant Core_AEAD_Logic as "Core AEAD Logic (core.py)"
         participant Key_Derivation as "Key Derivation (core.py)"
@@ -121,82 +127,82 @@
         participant Filesystem as "Filesystem I/O"
     end
 
-    User-&gt;&gt;CLI_GUI: Start Encrypt/Decrypt (file, key_source, params)
+    User->>CLI_GUI: Start Encrypt/Decrypt (file, key_source, params)
 
-    CLI_GUI-&gt;&gt;Core_AEAD_Logic: call encrypt_file(infile, outfile, ...) / decrypt_file(infile, outfile, ...)
+    CLI_GUI->>Core_AEAD_Logic: call encrypt_file(infile, outfile, ...) / decrypt_file(infile, outfile, ...)
     activate Core_AEAD_Logic
 
-    Core_AEAD_Logic-&gt;&gt;Filesystem: Read plaintext file size (Encrypt) / Read Header (Decrypt)
-    Core_AEAD_Logic-&gt;&gt;Core_AEAD_Logic: Generate Salt &amp; Nonce (Encrypt)
+    Core_AEAD_Logic->>Filesystem: Read plaintext file size (Encrypt) / Read Header (Decrypt)
+    Core_AEAD_Logic->>Core_AEAD_Logic: Generate Salt & Nonce (Encrypt)
 
-    Core_AEAD_Logic-&gt;&gt;Key_Derivation: Determine Key Source (Password/Seed/NPY)
+    Core_AEAD_Logic->>Key_Derivation: Determine Key Source (Password/Seed/NPY)
     activate Key_Derivation
     alt Password (Argon2id)
-        Key_Derivation-&gt;&gt;External_Crypto_Libs: kdf_from_password(password, salt, ...)
-        External_Crypto_Libs--&gt;&gt;Key_Derivation: Derived Master Key (32 bytes)
+        Key_Derivation->>External_Crypto_Libs: kdf_from_password(password, salt, ...)
+        External_Crypto_Libs-->>Key_Derivation: Derived Master Key (32 bytes)
     else Seed (Blake3)
-        Key_Derivation-&gt;&gt;External_Crypto_Libs: kdf_from_seed(seed)
-        External_Crypto_Libs--&gt;&gt;Key_Derivation: Derived Master Key (32 bytes)
+        Key_Derivation->>External_Crypto_Libs: kdf_from_seed(seed)
+        External_Crypto_Libs-->>Key_Derivation: Derived Master Key (32 bytes)
     else NPY (Blake3)
-        Key_Derivation-&gt;&gt;External_Crypto_Libs: kdf_from_npy(key_npy_path)
-        External_Crypto_Libs--&gt;&gt;Key_Derivation: Derived Master Key (32 bytes)
+        Key_Derivation->>External_Crypto_Libs: kdf_from_npy(key_npy_path)
+        External_Crypto_Libs-->>Key_Derivation: Derived Master Key (32 bytes)
     end
-    Key_Derivation--&gt;&gt;Core_AEAD_Logic: Master Key
+    Key_Derivation-->>Core_AEAD_Logic: Master Key
     deactivate Key_Derivation
 
-    Core_AEAD_Logic-&gt;&gt;SQSE_DLL_Wrapper: Initialize SQSEDLL(dll_path, gpu_idx)
+    Core_AEAD_Logic->>SQSE_DLL_Wrapper: Initialize SQSEDLL(dll_path, gpu_idx)
     activate SQSE_DLL_Wrapper
-    SQSE_DLL_Wrapper-&gt;&gt;CC_OpenCL_DLL: Load DLL &amp; Init GPU (initialize_gpu, sqse_load_kernels)
+    SQSE_DLL_Wrapper->>CC_OpenCL_DLL: Load DLL & Init GPU (initialize_gpu, sqse_load_kernels)
     activate CC_OpenCL_DLL
-    CC_OpenCL_DLL--&gt;&gt;SQSE_DLL_Wrapper: DLL Ready
+    CC_OpenCL_DLL-->>SQSE_DLL_Wrapper: DLL Ready
     deactivate CC_OpenCL_DLL
-    SQSE_DLL_Wrapper--&gt;&gt;Core_AEAD_Logic: SQSEDLL Instance
+    SQSE_DLL_Wrapper-->>Core_AEAD_Logic: SQSEDLL Instance
     deactivate SQSE_DLL_Wrapper
 
-    Core_AEAD_Logic-&gt;&gt;Filesystem: Write Header (MAGIC, VER, Flags, KDF params, K, Steps, Nonce, Salt) (Encrypt)
-    Core_AEAD_Logic-&gt;&gt;External_Crypto_Libs: Init BLAKE3 MAC with Master Key
+    Core_AEAD_Logic->>Filesystem: Write Header (MAGIC, VER, Flags, KDF params, K, Steps, Nonce, Salt) (Encrypt)
+    Core_AEAD_Logic->>External_Crypto_Libs: Init BLAKE3 MAC with Master Key
     activate External_Crypto_Libs
-    Core_AEAD_Logic-&gt;&gt;External_Crypto_Libs: Update MAC with Header data
+    Core_AEAD_Logic->>External_Crypto_Libs: Update MAC with Header data
 
     loop For each data chunk
-        Core_AEAD_Logic-&gt;&gt;Filesystem: Read Plaintext Chunk (Encrypt) / Ciphertext Chunk (Decrypt)
+        Core_AEAD_Logic->>Filesystem: Read Plaintext Chunk (Encrypt) / Ciphertext Chunk (Decrypt)
         
-        Core_AEAD_Logic-&gt;&gt;External_Crypto_Libs: expand_key_float32(Master Key, Nonce, Chunk Counter)
-        External_Crypto_Libs--&gt;&gt;Core_AEAD_Logic: Chunk-specific Float32 Key Array
+        Core_AEAD_Logic->>External_Crypto_Libs: expand_key_float32(Master Key, Nonce, Chunk Counter)
+        External_Crypto_Libs-->>Core_AEAD_Logic: Chunk-specific Float32 Key Array
 
-        Core_AEAD_Logic-&gt;&gt;SQSE_DLL_Wrapper: keystream_bytes(chunk_size, K, Steps, Float32 Key Array)
+        Core_AEAD_Logic->>SQSE_DLL_Wrapper: keystream_bytes(chunk_size, K, Steps, Float32 Key Array)
         activate SQSE_DLL_Wrapper
-        SQSE_DLL_Wrapper-&gt;&gt;CC_OpenCL_DLL: execute_sqse_encrypt_float(zeros_input, Float32 Key Array, ...)
+        SQSE_DLL_Wrapper->>CC_OpenCL_DLL: execute_sqse_encrypt_float(zeros_input, Float32 Key Array, ...)
         activate CC_OpenCL_DLL
-        CC_OpenCL_DLL--&gt;&gt;SQSE_DLL_Wrapper: theta, pmask (Keystream components)
+        CC_OpenCL_DLL-->>SQSE_DLL_Wrapper: theta, pmask (Keystream components)
         deactivate CC_OpenCL_DLL
-        SQSE_DLL_Wrapper-&gt;&gt;SQSE_DLL_Wrapper: Convert theta to byte Keystream
-        SQSE_DLL_Wrapper--&gt;&gt;Core_AEAD_Logic: Byte Keystream
+        SQSE_DLL_Wrapper->>SQSE_DLL_Wrapper: Convert theta to byte Keystream
+        SQSE_DLL_Wrapper-->>Core_AEAD_Logic: Byte Keystream
         deactivate SQSE_DLL_Wrapper
 
-        Core_AEAD_Logic-&gt;&gt;Core_AEAD_Logic: XOR (Plaintext/Ciphertext) with Keystream
-        Core_AEAD_Logic-&gt;&gt;Filesystem: Write Ciphertext Chunk (Encrypt) / Plaintext Chunk (Decrypt)
-        Core_AEAD_Logic-&gt;&gt;External_Crypto_Libs: Update BLAKE3 MAC with Ciphertext Chunk
+        Core_AEAD_Logic->>Core_AEAD_Logic: XOR (Plaintext/Ciphertext) with Keystream
+        Core_AEAD_Logic->>Filesystem: Write Ciphertext Chunk (Encrypt) / Plaintext Chunk (Decrypt)
+        Core_AEAD_Logic->>External_Crypto_Libs: Update BLAKE3 MAC with Ciphertext Chunk
     end
 
-    Core_AEAD_Logic-&gt;&gt;Filesystem: Write Final BLAKE3 MAC (Encrypt)
-    Core_AEAD_Logic-&gt;&gt;Filesystem: Read Stored BLAKE3 MAC (Decrypt)
-    Core_AEAD_Logic-&gt;&gt;External_Crypto_Libs: Finalize BLAKE3 MAC
-    External_Crypto_Libs--&gt;&gt;Core_AEAD_Logic: Calculated MAC
+    Core_AEAD_Logic->>Filesystem: Write Final BLAKE3 MAC (Encrypt)
+    Core_AEAD_Logic->>Filesystem: Read Stored BLAKE3 MAC (Decrypt)
+    Core_AEAD_Logic->>External_Crypto_Libs: Finalize BLAKE3 MAC
+    External_Crypto_Libs-->>Core_AEAD_Logic: Calculated MAC
 
     alt Decryption
-        Core_AEAD_Logic-&gt;&gt;Core_AEAD_Logic: Compare Calculated MAC with Stored MAC
+        Core_AEAD_Logic->>Core_AEAD_Logic: Compare Calculated MAC with Stored MAC
         alt MAC Mismatch
             Core_AEAD_Logic--xCLI_GUI: Error: MAC Verification Failed (Tampered/Wrong Key)
         else MAC Match
-            Core_AEAD_Logic--&gt;&gt;CLI_GUI: Decryption Successful
+            Core_AEAD_Logic-->>CLI_GUI: Decryption Successful
         end
     else Encryption
-        Core_AEAD_Logic--&gt;&gt;CLI_GUI: Encryption Successful
+        Core_AEAD_Logic-->>CLI_GUI: Encryption Successful
     end
     deactivate External_Crypto_Libs
     deactivate Core_AEAD_Logic
-    CLI_GUI--&gt;&gt;User: Operation Result
+    CLI_GUI-->>User: Operation Result
    </div>
    <p class="figure-caption">
     Abbildung 1: Systemarchitektur und Datenfluss von SQSE AEAD
