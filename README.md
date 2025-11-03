@@ -1,212 +1,292 @@
-# SQSE AEAD — Anleitung und Beispiele (Windows / PowerShell)
 
-Dieses Repository enthält Demo- und Produktivwerkzeuge für **SQSE-basierte Verschlüsselung** (Sub-Quantum State Encryption), welche die GPU/DLL `CC_OpenCL.dll` als Keystream-Generator nutzt.  
-Die Implementierung bietet mehrere Modi:
+# SQSE AEAD — Anleitung, Best Practices & Forschungshintergrund (Windows / PowerShell)
 
-- **Legacy-Container** (float-basierter Container, nicht bitgenau) — nur zu Demonstrationszwecken.  
-- **XOR-Keystream** (bitgenau) — erzeugt einen deterministischen Keystream aus SQSE und XORt diesen mit dem Plaintext (bitgenaue Roundtrips).  
-- **AEAD (sqse_aead.py)** — Produktionstauglicher Modus: Chunked XOR-Keystream + **Nonce/Counter** + **Argon2id** (optional) oder Seed/NPY → **BLAKE3-MAC** für Integrität.
-
-> Hinweis: Dies ist Forschungscode und kein ersetzt formell verifizierte Post-Quantum-Kryptografie. Er liefert jedoch starke praktische Schutzmechanismen (memory-hard KDF, nonce/counter, AEAD-MAC).
+Dieses Repository bündelt Demo- und Produktivwerkzeuge für **SQSE-basierte Verschlüsselung**  
+(*Sub‑Quantum State Encryption*), die eine GPU‑beschleunigte DLL (`CC_OpenCL.dll`) als Keystream‑Generator nutzt.  
+Das Ziel: **starke praktische Sicherheit**, klare Bedienung, reproduzierbare Workflows und saubere Integritätsprüfung (AEAD).
 
 ---
 
-## Dateien in diesem Ordner
+## Inhaltsverzeichnis
 
-- `sqse_aead.py` — AEAD-Verschlüsselung (empfohlen).  
-- `sqse_files.py` — ältere/leichtere Varianten (Legacy/XOR).  
-- `sqse_demo.py` — Demo / Bench (quick / sweep).  
-- `app_streamlit_aead.py` — Streamlit UI für `sqse_aead.py`.  
-- `keygen.py` (optional) — Hilfsprogramm zum Erzeugen einer `.npy` Keydatei.  
-- `CC_OpenCL.dll` — deine kompilierte DLL (muss vorhanden sein).
+1. [Überblick & Modi](#überblick--modi)  
+2. [Dateien & Struktur](#dateien--struktur)  
+3. [Installation](#installation)  
+4. [Key-Erzeugung (Passwort/Seed/NPY)](#key-erzeugung-passwortseednpy)  
+5. [AEAD: Beispiele (PowerShell)](#aead-beispiele-powershell)  
+6. [XOR-Modus (Legacy / Debug)](#xor-modus-legacy--debug)  
+7. [Streamlit UI](#streamlit-ui)  
+8. [Sicherheitshinweise](#sicherheitshinweise)  
+9. [Troubleshooting](#troubleshooting)  
+10. [Continuous Integration (GitHub Actions)](#continuous-integration-github-actions)  
+11. [Erweiterte Werkzeuge](#erweiterte-werkzeuge)  
+12. [Angriffsdauer & Kosten (Überblick)](#angriffsdauer--kosten-überblick)  
+13. [Roadmap](#roadmap)  
+14. [Forschung & Kryptographie‑Hintergrund (Anhang)](#forschung--kryptographiehintergrund-anhang)
 
 ---
 
-## Voraussetzungen / Installation
+## Überblick & Modi
 
-Python 3.12 empfohlen. Im Powershell (einzeilig):
+Die Implementierung stellt drei Pfade bereit:
+
+- **Legacy‑Container** (float‑basiert, *nicht* bitgenau) — rein didaktisch.  
+- **XOR‑Keystream** (bitgenau) — deterministischer Keystream aus SQSE, XOR mit Plaintext.  
+- **AEAD** (empfohlen) — Chunked XOR‑Keystream + **Nonce/Counter** + **Argon2id** (optional) oder Seed/NPY → **BLAKE3‑MAC**.
+  - **Integrität**: Manipulationen werden erkannt (MAC).  
+  - **Wiederverwendungsschutz**: Nonce/Counter pro Datei/Chunk.  
+  - **Starke Schlüsselableitung** (falls Passwort): Argon2id (memory‑hard).
+
+> ⚠️ **Hinweis:** Forschungs‑Code. Kein formaler Post‑Quantum‑Beweis.  
+> Praktisch jedoch **sehr robust**, sofern Key‑Disziplin, starke KDF‑Parameter und unveränderte DLL gewährleistet sind.
+
+---
+
+## Dateien & Struktur
+
+- `sqse_aead_pkg/`  
+  - `core.py` — AEAD‑Kern (Header‑v2 inkl. Argon2‑Parametern, KDFs, Keystream, MAC, Selftest)  
+  - `cli.py` — Typer‑CLI (encrypt / decrypt / selftest-cmd)
+- `sqse_aead.py` — Standalone‑AEAD (Kompatibilitäts‑Entry)
+- `sqse_files.py` — Legacy/XOR‑Modus (Debug / Demo)
+- `sqse_demo.py` — Demo/Bench (quick / sweep)
+- `app_streamlit_aead.py` — Streamlit GUI
+- `keygen.py` — `.npy`‑Key Generator
+- `CC_OpenCL.dll` — GPU‑beschleunigte Keystream‑DLL (lokal einbinden)
+- **Erweiterte Tools:**  
+  - `validate_header.py` — prüft Header‑v2 (Argon2‑Minima erzwingen)  
+  - `rotate_keys_and_reencrypt.py` — Massen‑Rotation (parallel, atomar, verifiziert)  
+  - `HSM_README.md` — Muster für HSM‑Integration (YubiHSM2, PKCS#11, CloudHSM)  
+  - `cost_estimate.md` — grobe Kosten-/Zeitmodelle für Angreifer
+- `.github/workflows/ci.yml` — GitHub Actions (Selftest + Header‑Check)
+
+---
+
+## Installation
 
 ```powershell
 python -m pip install --upgrade pip
-python -m pip install numpy blake3 streamlit
-# Optional (für Passwortmodus):
+python -m pip install numpy blake3 typer rich streamlit
+# Passwortmodus (Argon2id):
 python -m pip install argon2-cffi
-````
+# Paket lokal (Typer-CLI):
+python -m pip install -e .
+```
 
-> Wenn du keine Argon2-Abhängigkeit willst, nutze `--seed` oder `--key-npy` statt `--pass`.
+**CLI (nach Installation):**
+```powershell
+sqse-aead encrypt .\in.txt .\out.aead --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --pass "SehrStarkesPasswort"
+sqse-aead decrypt .\out.aead .\out.txt    --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --pass "SehrStarkesPasswort"
+sqse-aead selftest-cmd --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0
+```
 
 ---
 
-## Key-Erzeugung
-
-Du hast drei Möglichkeiten, ein Schlüsselmaterial bereitzustellen:
+## Key‑Erzeugung (Passwort/Seed/NPY)
 
 ### A) Passwort (Argon2id)
-
-Sicherste, menschenlesbare Option. Argon2-Parameter sind standardmäßig in `sqse_aead.py` gesetzt (512 MiB memory, t=3, p=4). Du musst nichts erzeugen — gib beim Encrypt/Decrypt `--pass "MeinStarkesPasswort"` an.
+Standard (v2): `memory=512 MiB`, `t=3`, `p=4` — im Header gespeichert und beim Decrypt wiederverwendet.
 
 ### B) Seed (deterministisch)
-
-Für Tests oder reproduzierbare Laufwege:
-
+Bequem für Tests/Reproduktion:
 ```powershell
 --seed 123456
 ```
 
-Das erzeugt intern einen 32-Byte Key via BLAKE3.
-
-### C) `.npy` Datei (Rohkey)
-
-Große, zufällige Binärdatei als Key. Erzeuge z.B. eine 64 MiB Keydatei (PowerShell-Einzeiler):
-
+### C) `.npy` (Rohkey)
+Erzeuge z. B. 64 MiB zufällige Bytes:
 ```powershell
 python -c "import numpy as np; np.save('key.npy', np.random.default_rng(42).integers(0,256,size=64*1024*1024,dtype=np.uint8)); print('key.npy erstellt')"
-```
-
-Oder benutze das mitgelieferte `keygen.py`:
-
-```powershell
+# oder
 python .\keygen.py 64 key.npy
 ```
 
 ---
 
-## AEAD: Beispiele (PowerShell, Einzeiler)
+## AEAD: Beispiele (PowerShell)
 
-### Verschlüsseln (Passwort / Argon2)
-
+### Passwort / Argon2
 ```powershell
-python .\sqse_aead.py encrypt .\test.txt .\test.aead --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --K 1.2 --steps 16 --pass "SehrStarkesPasswort" --argon-mem-mb 512 --argon-t 3 --argon-p 4
+python .\sqse_aead.py encrypt .\test.txt .\test.aead `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 `
+  --K 1.2 --steps 16 `
+  --pass "SehrStarkesPasswort" `
+  --argon-mem-mb 512 --argon-t 3 --argon-p 4
+
+python .\sqse_aead.py decrypt .\test.aead .\test_out.txt `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 `
+  --pass "SehrStarkesPasswort"
 ```
 
-### Entschlüsseln (Passwort)
-
+### Seed
 ```powershell
-python .\sqse_aead.py decrypt .\test.aead .\test_out.txt --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --pass "SehrStarkesPasswort"
+python .\sqse_aead.py encrypt .\test.txt .\test_seed.aead `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --K 1.2 --steps 16 --seed 123456
+python .\sqse_aead.py decrypt .\test_seed.aead .\test_seed_out.txt `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --seed 123456
 ```
 
-### Verschlüsseln (Seed)
-
+### Key‑NPY
 ```powershell
-python .\sqse_aead.py encrypt .\test.txt .\test_seed.aead --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --K 1.2 --steps 16 --seed 123456
-python .\sqse_aead.py decrypt .\test_seed.aead .\test_seed_out.txt --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --seed 123456
+python .\keygen.py 64 .\key.npy
+python .\sqse_aead.py encrypt .\test.txt .\test_npy.aead `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --K 1.2 --steps 16 --key-npy .\key.npy
+python .\sqse_aead.py decrypt .\test_npy.aead .\test_npy_out.txt `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --key-npy .\key.npy
 ```
 
-### Verschlüsseln (Key aus `.npy`)
-
-```powershell
-# Keyfile erzeugen (falls noch nicht vorhanden)
-python -c "import numpy as np; np.save('key.npy', np.random.default_rng(42).integers(0,256,size=64*1024*1024,dtype=np.uint8)); print('key.npy erstellt')"
-
-# Encrypt/Decrypt mit key.npy
-python .\sqse_aead.py encrypt .\test.txt .\test_npy.aead --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --K 1.2 --steps 16 --key-npy .\key.npy
-python .\sqse_aead.py decrypt .\test_npy.aead .\test_npy_out.txt --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --key-npy .\key.npy
-```
-
-### Hashvergleich (prüft Bitgleichheit)
-
+### Hash‑Vergleich
 ```powershell
 Get-FileHash .\test.txt; Get-FileHash .\test_out.txt
 ```
 
 ---
 
-## `sqse_files.py` (XOR-Modus) — kurze Befehle (falls du nur XOR willst)
+## XOR‑Modus (Legacy / Debug)
 
 ```powershell
-# Encrypt (bitgenau)
-python .\sqse_files.py encrypt .\test.txt .\test_xor.sqse --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --K 1.2 --steps 16 --key-seed 1234 --xor
+python .\sqse_files.py encrypt .\test.txt .\test_xor.sqse `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 `
+  --K 1.2 --steps 16 --key-seed 1234 --xor
 
-# Decrypt
-python .\sqse_files.py decrypt .\test_xor.sqse .\test_xor_out.txt --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --key-seed 1234 --xor
-
-# Hash-Check
-Get-FileHash .\test.txt; Get-FileHash .\test_xor_out.txt
+python .\sqse_files.py decrypt .\test_xor.sqse .\test_xor_out.txt `
+  --dll "G:\verschluesselung\CC_OpenCL.dll" --gpu 0 --key-seed 1234 --xor
 ```
 
 ---
 
-## Streamlit UI (lokal)
-
-Starte die App im Ordner mit `app_streamlit_aead.py`:
+## Streamlit UI
 
 ```powershell
 streamlit run app_streamlit_aead.py
 ```
-
-Die App bietet:
-
-* Dateiwähler für Input/Output
-* Key-Optionen (Passwort / Seed / Key-npy)
-* GPU-Index Feld
-* Chunk-Größe Einstellung
-* „Encrypt“ / „Decrypt“ Buttons und Live-Protokoll der DLL-Ausgaben
-* Optional: Download-Link der erzeugten Datei (Streamlit stellt dies bereit)
+Funktionen: Datei‑Picker, Key‑Optionen (Pass/Seed/NPY), GPU‑Index, Chunk‑Größe, Live‑Log, Download.
 
 ---
 
-## Sicherheitshinweise (essentiell)
+## Sicherheitshinweise
 
-1. **Keystream-Wiederverwendung vermeiden!** Verwende NIE denselben (Key, nonce, counter) wieder für andere Dateien. AEAD/Nonce-Disziplin ist Pflicht.
-2. **Argon2-Parameter**: Standardwerte sind konservativ (512 MiB). Beim Einsatz in ressourcenbegrenzten Umgebungen anpassen — aber nicht zu klein!
-3. **MAC-Verifikation**: Wenn die MAC-Verifikation fehlschlägt, verwirf die Datei. Niemals „stillschweigend“ akzeptieren.
-4. **DLL-Sicherheit**: Die Geheimhaltung und Integrität von `CC_OpenCL.dll` ist wichtig — manipulierte DLLs können Keystreams offenlegen.
-5. **Für echte Geheimhaltung**: Kombiniere starke Passwörter/Keydateien mit Argon2id und Nonce+MAC. Ein 256-Bit Schlüssel ist empfohlen.
-6. **Nicht quantensicher formal bewiesen**: Dieses System nutzt „quantensinspirierte“ Kerne, aber das ist keine formale Post-Quantum Garantie. Siehe Risikoanalyse vor Produktionseinsatz.
+1. **Keystream‑Reuse vermeiden** — neues `(Key, Nonce, Counter)` pro Datei/Chunk.  
+2. **Argon2‑Parameter hoch genug wählen** — besonders im Passwortmodus.  
+3. **MAC zwingend prüfen** — bei Fehler Datei verwerfen.  
+4. **DLL schützen** — Signaturen, Integritäts‑Checks, kontrollierte Auslieferung.  
+5. **Starke Schlüssel** — 256‑Bit / große `.npy` / HSM.  
+6. **Kein formaler PQ‑Beweis** — praktisch robust, aber bleibt Forschungscode.
 
 ---
 
 ## Troubleshooting
 
-* `Could not find module 'CC_OpenCL.dll'`: Nutze absoluten Pfad `--dll "G:\verschluesselung\CC_OpenCL.dll"` oder lege die DLL ins Skriptverzeichnis.
-* `initialize_gpu RC=...`: Manche DLL-Builds geben 1 als Erfolg; die Skripte akzeptieren 1 für `initialize_gpu`.
-* → Bei anderen Fehlern: Ausgabe hier posten (inkl. Kernel-Compile Log).
+- `Could not find module 'CC_OpenCL.dll'` → Pfad korrekt angeben (`--dll`), Datei ins Skript‑Verzeichnis legen.  
+- `initialize_gpu RC=...` → einige Builds nutzen `1` als OK (die Tools akzeptieren das).  
+- Persistente Fehler → Konsolen‑Log inkl. Kernel‑Compile‑Ausgaben posten.
 
 ---
 
-## Weiterentwicklung (ToDo / Vorschläge)
+## Continuous Integration (GitHub Actions)
 
-* Header erweitern um Argon2-Parameter (m/t/p) zur exakten Reproduzierbarkeit.
-* Option für Hardware-Security-Module (HSM) als Key-Quelle.
-* Optionaler deterministic Counter-Mode: per Dateiblocknummer in Header.
-* Benchmarks: Keystream-Durchsatz pro GPU für verschiedene Chunk-Größen.
+- Workflow: `.github/workflows/ci.yml`  
+- Enthält: Paket‑Install, optional Tests, Selftest (1 MB).  
+- Da die echte DLL nicht im Repo liegt, wird im Linux‑Run ein **Mock‑Stub** angelegt. Für **Windows‑Runner**: vor dem Selftest eine signierte Test‑DLL aus geschütztem Artifact‑Store laden.
+
+```yaml
+- name: Download test DLL (Windows)
+  if: runner.os == 'Windows'
+  run: |
+    powershell -Command "Invoke-WebRequest -Uri 'https://example.com/your-test-CC_OpenCL.dll' -OutFile 'CC_OpenCL.dll'"
+```
+
+**Wichtig:** Keine produktive DLL in öffentlichen CI‑Runs veröffentlichen.
+
+---
+
+## Erweiterte Werkzeuge
+
+### `validate_header.py` — Argon2‑Minima erzwingen
+- Liest **Header‑v2** und prüft `argon_m/t/p` gegen Mindestwerte (per ENV überschreibbar).
+- Einsatz: Release‑QA, Ingest‑Pipelines, CI‑Checks.
+
+### `rotate_keys_and_reencrypt.py` — Massen‑Rotation
+- Parallel, atomar (Backup → Replace), **Roundtrip‑Verifikation** jeder Datei.  
+- Für Millionen Dateien: Chunk‑Weise, Logging, Wiederaufnahmepunkte ergänzen.
+
+### `HSM_README.md` — HSM‑Integration
+- Muster/Pseudocode für YubiHSM2 / PKCS#11 / CloudHSM.  
+- Empfehlung: Masterkey **nie exportieren**, Datei‑Keys kontextuell ableiten (`HKDF(master, nonce||fileid)`).
+
+### `cost_estimate.md` — Kostenmodelle
+- Grobe Rechnungen: warum Argon2 + starke Keys realistische Angreifer ausbremst.  
+- **Kernaussage:** Brute‑Force wird ökonomisch schnell absurd teuer.
+
+---
+
+## Angriffsdauer & Kosten (Überblick)
+
+- **128‑Bit und mehr** → Brute‑Force praktisch unmöglich (astronomische Zeiten).  
+- **Passwörter**: tatsächliche Angriffe zielen auf Wörterbuch + Regeln + GPU — Argon2 (z. B. 512 MiB, t=3) reduziert Versuchsrate massiv.  
+- **Risikotreiber**: gestohlene `.npy`, kompromittierte DLL/Host, Side‑Channels. Schütze Schlüsselmaterial & Infrastruktur.
+
+---
+
+## Roadmap
+
+- HSM‑Schlüsselquellen „first‑class“ (PKCS#11‑Backend)  
+- Header‑Metadaten: Dateiname, Zeitstempel, Kommentar (optional)  
+- Mehr‑GPU Parallelisierung & Benchmarks (MB/s/Chunkgröße)  
+- UI‑Reports (Selftest/Throughput/Argon2‑Timing)  
+- Optionale „deterministic counter“‑Policy pro Datei
+
+---
+
+## Forschung & Kryptographie‑Hintergrund (Anhang)
+
+> Dieser Abschnitt erklärt die Idee hinter **SQSE** (Sub‑Quantum State Encryption) und ihre sichere Einbettung als Keystream‑Quelle in ein klassisches AEAD‑Gerüst.
+
+### 1) Motivation
+- **Klassische Stromchiffren** (CTR/XChaCha20/Etc.) benötigen einen starken Pseudozufall‑Keystream.  
+- **SQSE** liefert einen **GPU‑beschleunigten, komplexen Keystream** aus gekoppelten **dynamischen Systemen** (chaotische Karten, feldbasierte Iterationen, interne Rückkopplungen).  
+- Die **Sicherheit** im praktischen Betrieb entsteht aus *zwei* Schichten:  
+  1) **Starkes Schlüsselmaterial** (Argon2/Seed/NPY/HSM)  
+  2) **Korrekte AEAD‑Einbettung** (Nonce/Counter, MAC, Keystream‑Disziplin)
+
+### 2) Dynamische Kerne (vereinfacht)
+- **Chirikov‑/Standard‑Map**‑artige Iteration mit Parameter **K** (Chaos‑Intensität), Zustandsvektoren (θ, p), Iterationszahl **T**.  
+- **Kopplungen/Masken** (z. B. `p_mask`) stabilisieren/verrauschen lokale Zustände; GPU‑Kerne mischen Zustandsräume in hoher Dimension.
+- Ergebnis: **hochgradig sensitiv** gegenüber Schlüssel/Seed/Parametern → praktisch nicht invertierbar ohne Geheimnis.
+
+> Wichtig: Die **Korrektheit** der Verschlüsselung hängt *nicht* allein an der „Unknackbarkeit“ der Dynamik,  
+> sondern an der **AEAD‑Konstruktion** (Nonce/Counter + MAC). Darum ist die Keystream‑Quelle modular austauschbar — SQSE ist eine performante Option.
+
+### 3) AEAD‑Design (praktisch)
+- Datei wird in **Chunks** gesplittet (z. B. 8 MiB).  
+- Für jeden Chunk: deterministische **Keystream‑Ableitung** aus (Key, Nonce, Counter[, K, T]).  
+- **XOR** mit Plaintext → Ciphertext; zusätzlich **BLAKE3‑MAC** auf `(Header || Nonce || Counter || CipherChunk)` → Integrität.  
+- **Header‑v2** speichert `argon_m/t/p` und technische Parameter → reproduzierbare Entschlüsselung.
+
+### 4) Threat Model & Implikationen
+- **Brute‑Force** gegen 256‑Bit Key ist irrelevant (astronomisch).  
+- **Password‑Guessing** ist realistisch → **Argon2id** macht jeden Versuch teuer (Memory‑Hard).  
+- **Keystream‑Reuse** wäre fatal (XOR‑Chiffren‑Klasse) → korrekte Nonce/Counter‑Politik ist entscheidend (erfüllt).  
+- **Implementation Risks**: kompromittierte DLL/Host, Side‑Channels → Integritätsprüfung, Signaturen, Härtung.
+
+### 5) Parameterwahl
+- **K (Chaos‑Parameter)**: Mittelwerte (z. B. 1.2–2.0) liefern gute Mischung ohne Divergenz; höhere K erhöhen Entropietransfer, aber teste Stabilität.  
+- **steps (T)**: erhöht Mischungsgrad; wachse moderat (16–64), beachte Performance vs. Nutzen.  
+- **argon_m/t/p**: an Bedrohungslage anpassen (Laptop 64–128 MiB; Enterprise 256–512 MiB; High‑Threat ≥ 1024 MiB).
+
+### 6) Verifikation & Bench
+- **Selftest** prüft Roundtrip + MAC.  
+- **Benchmarks**: Messe Durchsatz (MB/s) vs. Chunkgröße; prüfe GPU‑Sättigung (DLL‑Kompatibilität/Kernels).
+
+### 7) Reproduzierbarkeit & Audit
+- **Header‑v2** + `validate_header.py` → Policy‑konforme Entschlüsselbarkeit.  
+- **rotate_keys_and_reencrypt.py** → sichere Migration/Rotation mit Verifizierung.  
+- **CI‑Checks** → Mindest‑Argon2 erzwingen, Selftest dokumentieren.
 
 ---
 
 ## Kontakt / Credits
 
-Entwickler: Ralf Krümmel
-Projekt: CC_OpenCL / SQSE (Sub-Quantum State Encryption)
-
-
-
----
-
-## Continuous Integration (GitHub Actions) — Hinweise
-
-Eine Beispiel-Workflow-Datei für GitHub Actions wurde als `.github/workflows/ci.yml` hinzugefügt.
-Der Workflow führt Unit-Tests, Paketinstallation und einen Self-Test (1 MB) aus. Hinweis: die `CC_OpenCL.dll`
-ist **nicht** im Repository enthalten und kann in CI nicht ohne weiteres geladen werden.
-
-### Mock / Test-DLL in CI
-Im Beispiel-Workflow wird ein kleiner Linux-Stub (`/usr/local/bin/CC_OpenCL.dll`) als Platzhalter erstellt,
-damit Import-Pfade und Funktionspfade getestet werden können. Für echte Tests oder Windows-Runner:
-
-- **Windows Runner:** Du kannst in `.github/workflows/ci.yml` einen Schritt hinzufügen, der eine Windows-kompatible Test-DLL
-  (z. B. ein signiertes Test-Artefakt) in das Arbeitsverzeichnis kopiert. Beispiel:
-  ```yaml
-  - name: Download test DLL (Windows)
-    if: runner.os == 'Windows'
-    run: |
-      powershell -Command "Invoke-WebRequest -Uri 'https://example.com/your-test-CC_OpenCL.dll' -OutFile 'CC_OpenCL.dll'"
-  ```
-
-- **Sichere Handhabung:** Lade niemals deine produktive, un-signierte `CC_OpenCL.dll` in öffentliche CI-Runner hoch.
-  Verwende private artifacts oder geschützte Releases (GitHub Releases with access control) oder einen Secrets-geschützten
-  Storage (z. B. Azure Blob, S3) und lade die Test-DLL während des CI-Runs nur in privaten Repos.
-
-### Wie ersetzen
-1. Ersetze die Mock-Stubs im Workflow durch einen Schritt, der dein signiertes Test-DLL aus einem Artefakt-Storage lädt.  
-2. Passe Pfade in `selftest` an, falls die DLL in einem anderen Pfad liegt.  
-3. Führe `sqse-aead selftest-cmd` in CI nur in einem kontrollierten Test-Environment aus (nicht in public forks).
+**Entwickler:** Ralf Krümmel  
+**Projekt:** CC_OpenCL / SQSE (Sub‑Quantum State Encryption)  
 
