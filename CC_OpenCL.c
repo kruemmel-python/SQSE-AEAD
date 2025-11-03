@@ -2536,17 +2536,17 @@ const char *subqg_agent_kernel_src =
 "        field_map[idx] = sin(phase[idx]) * local_energy;\n"
 "    }\n"
 "}\n";
-const char *sqse_kernel_src =
+static const char * const sqse_kernel_src =
 "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"
 "#define TWO_PI 6.283185307179586476925286766559f\n"
 "inline float wrap_2pi(float x) {\n"
 "    float y = fmod(x, TWO_PI);\n"
 "    return (y < 0.0f) ? (y + TWO_PI) : y;\n"
 "}\n"
-"inline float mask_from_key(float key, float lambda_field) {\n"
-"    float a = sin(key * 3.1415926535f + lambda_field * 0.5f);\n"
-"    float b = cos(key * 2.7182818284f - lambda_field * 1.6180339887f);\n"
-"    float c = a * b + sin((a - b) * 0.57721f + lambda_field);\n"
+"inline float mask_from_key(float key, float chaos_K) {\n"
+"    float a = sin(key * 3.1415926535f + chaos_K * 0.5f);\n"
+"    float b = cos(key * 2.7182818284f - chaos_K * 1.6180339887f);\n"
+"    float c = a * b + sin((a - b) * 0.57721f + chaos_K);\n"
 "    float m = fmod(fabs(c) * 123.4567f, TWO_PI);\n"
 "    return m;\n"
 "}\n"
