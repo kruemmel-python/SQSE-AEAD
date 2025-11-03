@@ -1,5 +1,6 @@
 
 # SQSE AEAD — Anleitung, Best Practices & Forschungshintergrund (Windows / PowerShell)
+<img width="1024" height="1024" alt="Generated Image November 03, 2025 - 7_41PM" src="https://github.com/user-attachments/assets/48f3b75e-6d73-441a-89f7-d770a5952ae7" />
 
 Dieses Repository bündelt Demo- und Produktivwerkzeuge für **SQSE-basierte Verschlüsselung**  
 (*Sub‑Quantum State Encryption*), die eine GPU‑beschleunigte DLL (`CC_OpenCL.dll`) als Keystream‑Generator nutzt.  
